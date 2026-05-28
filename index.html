@@ -1,0 +1,1168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ledgerly — Invoice Intelligence</title>
+<meta name="description" content="Mark a sample invoice once, then auto-extract invoice number, total, client and VAT from every invoice of the same format. Build Excel & PDF analytics. Runs 100% in your browser." />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<script type="module">
+  // pdf.js v4 (ESM) — uses WASM for heavy image decoders (JPEG2000, JBIG2) which are
+  // much faster than v3 on mobile and fix the common MFP-scanner-PDF hang.
+  import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
+  window.pdfjsLib = pdfjsLib;
+  window.dispatchEvent(new Event('pdfReady'));
+</script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.4/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<style>
+  :root{
+    --bg:#ffffff;
+    --soft:#f5f9f5;
+    --soft-2:#eef5ee;
+    --line:#e3ebe4;
+    --line-2:#d2ddd3;
+    --ink:#15241a;
+    --ink-soft:#33473b;
+    --muted:#6f8175;
+    --green:#1ca84e;          /* parrot green */
+    --green-deep:#138a3f;
+    --green-bright:#36c46a;
+    --green-tint:#e7f7ec;
+    --rose:#e1654f;
+    --amber:#e0a32e;
+    --radius:16px;
+    --shadow:0 12px 40px -18px rgba(20,60,35,.28);
+    --shadow-soft:0 2px 10px -4px rgba(20,60,35,.16);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg);color:var(--ink);
+    font-family:'Hanken Grotesk',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;line-height:1.55;min-height:100vh;
+  }
+  .wrap{max-width:1140px;margin:0 auto;padding:0 24px 100px}
+  h1,h2,h3,.disp{font-family:'Bricolage Grotesque',sans-serif;letter-spacing:-.01em}
+  .mono{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+
+  header.top{display:flex;align-items:center;justify-content:space-between;padding:26px 0 18px;gap:16px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:13px}
+  .mark{width:42px;height:42px;border-radius:12px;flex:none;background:linear-gradient(150deg,var(--green-bright),var(--green-deep));
+    display:grid;place-items:center;color:#fff;box-shadow:0 8px 20px -8px rgba(28,168,78,.6)}
+  .mark svg{width:22px;height:22px}
+  .brand h1{font-size:23px;margin:0;font-weight:700}
+  .brand p{margin:0;color:var(--muted);font-size:12.5px}
+  .top-actions{display:flex;gap:10px;flex-wrap:wrap}
+
+  .btn{font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;border-radius:11px;padding:10px 16px;
+    border:1px solid var(--line-2);background:#fff;color:var(--ink);transition:.16s;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+  .btn:hover{border-color:var(--green);color:var(--green-deep)}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .btn.primary{background:var(--green);border-color:var(--green);color:#fff}
+  .btn.primary:hover{background:var(--green-deep);border-color:var(--green-deep);color:#fff;box-shadow:0 8px 22px -10px rgba(28,168,78,.7)}
+  .btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+  .btn.ghost:hover{color:var(--rose)}
+
+  .strap{font-size:clamp(30px,5vw,50px);line-height:1.05;font-weight:700;margin:18px 0 10px;max-width:16ch}
+  .strap em{font-style:normal;color:var(--green)}
+  .sub{color:var(--ink-soft);max-width:64ch;font-size:16px}
+  .sub b{color:var(--ink)}
+
+  .drop{margin-top:30px;border:1.5px dashed var(--line-2);border-radius:var(--radius);background:var(--soft);
+    padding:44px 24px;text-align:center;transition:.18s;cursor:pointer}
+  .drop:hover,.drop.over{border-color:var(--green);background:var(--green-tint)}
+  .drop .ic{width:42px;height:42px;margin:0 auto 8px;color:var(--green)}
+  .drop h3{margin:4px 0;font-weight:600;font-size:19px}
+  .drop p{margin:0;color:var(--muted);font-size:13.5px}
+  .pills{display:flex;gap:8px;justify-content:center;margin-top:14px;flex-wrap:wrap}
+  .pill{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);
+    border:1px solid var(--line);border-radius:999px;padding:4px 11px;background:#fff}
+  .row-opts{display:flex;gap:16px;align-items:center;justify-content:center;margin-top:18px;flex-wrap:wrap}
+  .opt{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-soft)}
+  select,input.txt{font-family:inherit;background:#fff;color:var(--ink);border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;font-size:13.5px}
+  select:focus,input:focus{outline:none;border-color:var(--green)}
+
+  .progress-wrap{margin-top:18px;display:none}
+  .progress-wrap.show{display:block}
+  .pbar{height:7px;border-radius:99px;background:var(--soft-2);overflow:hidden;border:1px solid var(--line)}
+  .pfill{height:100%;width:0;background:linear-gradient(90deg,var(--green-bright),var(--green));transition:width .25s}
+  .pstatus{font-size:12.5px;color:var(--muted);margin-top:8px}
+
+  .sec{margin-top:50px}
+  .sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+  .sec-head h2{font-size:23px;margin:0;font-weight:700}
+  .sec-head .hint{color:var(--muted);font-size:13px}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow-soft)}
+  .kpi .lab{font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .kpi .val{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;font-size:24px;font-weight:600;margin-top:6px;letter-spacing:-.02em}
+  .kpi .meta{font-size:12px;color:var(--muted);margin-top:2px}
+  .kpi.green .val{color:var(--green-deep)} .kpi.rose .val{color:var(--rose)} .kpi.amber .val{color:var(--amber)}
+
+  .charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow-soft)}
+  .card h3{margin:0 0 12px;font-weight:600;font-size:15px;color:var(--ink-soft)}
+  .card .cwrap{position:relative;height:240px}
+  @media(max-width:760px){.charts{grid-template-columns:1fr}}
+
+  .filters{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .seg{display:flex;border:1px solid var(--line-2);border-radius:11px;overflow:hidden;background:#fff}
+  .seg button{background:#fff;border:none;color:var(--muted);padding:8px 15px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600}
+  .seg button.active{background:var(--green);color:#fff}
+  .search{flex:1;min-width:160px}
+  .search input{width:100%}
+
+  .tbl-scroll{overflow:auto;border:1px solid var(--line);border-radius:var(--radius);background:#fff;box-shadow:var(--shadow-soft)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:960px}
+  thead th{text-align:left;padding:13px 12px;background:var(--soft);color:var(--muted);font-weight:600;font-size:11px;
+    letter-spacing:.05em;text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--line)}
+  tbody td{padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tbody tr:hover{background:var(--soft)}
+  .cell-input{width:100%;background:transparent;border:1px solid transparent;border-radius:7px;color:var(--ink);
+    font-family:inherit;font-size:13.5px;padding:6px 7px}
+  .cell-input:hover{border-color:var(--line-2)}
+  .cell-input:focus{outline:none;border-color:var(--green);background:var(--green-tint)}
+  td .cell-input.num{font-family:'IBM Plex Mono',monospace;text-align:right}
+  .badge-period{font-family:inherit;font-size:12.5px;background:#fff;border:1px solid var(--line-2);color:var(--ink);border-radius:8px;padding:6px 7px}
+  .conf{font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600}
+  .conf.hi{color:var(--green-deep)} .conf.mid{color:var(--amber)} .conf.lo{color:var(--rose)}
+  .iconbtn{background:transparent;border:none;cursor:pointer;color:var(--muted);font-size:15px;padding:4px 7px;border-radius:7px}
+  .iconbtn:hover{color:var(--rose);background:rgba(225,101,79,.1)}
+  .src{font-size:11px;color:var(--muted);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  .empty{text-align:center;color:var(--muted);padding:54px 20px}
+  .empty .big{font-family:'Bricolage Grotesque';font-size:19px;color:var(--ink-soft);margin-bottom:6px;font-weight:600}
+
+  footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);color:var(--muted);font-size:13px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+
+  /* ---- Mapper modal ---- */
+  .backdrop{position:fixed;inset:0;background:rgba(20,40,28,.45);backdrop-filter:blur(3px);z-index:60;display:none;align-items:center;justify-content:center;padding:14px}
+  .backdrop.show{display:flex}
+  .modal{background:#fff;border-radius:18px;max-width:1000px;width:100%;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;height:min(92vh,860px)}
+  .modal-head{padding:14px 18px 10px;border-bottom:1px solid var(--line);flex:none}
+  .modal-head h2{margin:0;font-size:19px;font-weight:700}
+  .modal-head p{margin:3px 0 0;color:var(--muted);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .modal-head .fileinfo{color:var(--green-deep);font-weight:600}
+  .map-toolbar{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
+  .seg.sm button{padding:6px 11px;font-size:12.5px}
+  .active-field-hint{font-size:12px;color:var(--ink-soft);margin-left:auto;font-weight:600}
+  .active-field-hint b{color:var(--green-deep)}
+  .stage{flex:1 1 auto;min-height:0;background:var(--soft);overflow:auto;padding:12px;-webkit-overflow-scrolling:touch;position:relative}
+  .stage-loader{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;background:var(--soft);z-index:2}
+  .stage-loader.hidden{display:none}
+  .stage-loader .sl-msg{margin-top:14px;font-weight:600;color:var(--ink-soft);font-size:15px}
+  .stage-loader .sl-hint{margin-top:6px;color:var(--muted);font-size:12.5px;max-width:34ch;line-height:1.5}
+  .stage-loader .sl-actions{margin-top:14px;display:flex;flex-direction:column;gap:8px;align-items:center}
+  .spin.big{width:32px;height:32px;border-width:3px}
+  .stage-loader.error .spin{display:none}
+  .stage-loader.error .sl-msg{color:var(--rose)}
+  .canvas-wrap{position:relative;display:block;width:100%;line-height:0;box-shadow:var(--shadow-soft);border-radius:8px;overflow:hidden;background:#fff}
+  .canvas-wrap canvas{width:100%;height:auto;display:block;-webkit-user-select:none;user-select:none}
+  #ovLayer{position:absolute;inset:0;touch-action:none}
+  .stage.mode-scroll #ovLayer{pointer-events:none}
+  .stage.mode-draw .canvas-wrap{cursor:crosshair}
+  .ov-box{position:absolute;border:2px solid var(--green);background:rgba(28,168,78,.14);border-radius:3px;pointer-events:none}
+  .ov-box .ov-tag{position:absolute;top:-18px;left:-2px;font-size:10px;font-weight:700;color:#fff;background:var(--green);padding:1px 6px;border-radius:5px;white-space:nowrap;font-family:'Hanken Grotesk'}
+  .ov-box.f-total{border-color:#e0a32e;background:rgba(224,163,46,.16)} .ov-box.f-total .ov-tag{background:#e0a32e}
+  .ov-box.f-client{border-color:#2f8fd6;background:rgba(47,143,214,.16)} .ov-box.f-client .ov-tag{background:#2f8fd6}
+  .ov-box.f-vat{border-color:#9b59b6;background:rgba(155,89,182,.16)} .ov-box.f-vat .ov-tag{background:#9b59b6}
+  .panel{flex:none;padding:12px 14px;border-top:1px solid var(--line)}
+  .panel .lbl{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;margin-bottom:9px}
+  .chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+  .chip{flex:none;border:1px solid var(--line-2);border-radius:11px;padding:8px 12px;cursor:pointer;transition:.14s;background:#fff;min-width:104px}
+  .chip:hover{border-color:var(--green)}
+  .chip.active{border-color:var(--green);background:var(--green-tint);box-shadow:0 0 0 3px rgba(28,168,78,.12)}
+  .chip .ct{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px}
+  .chip .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .chip .cv{font-family:'IBM Plex Mono',monospace;font-size:11.5px;margin-top:4px;color:var(--green-deep);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
+  .chip .cv.empty{color:var(--muted)}
+  .chip .check{margin-left:auto;color:var(--green);font-weight:700}
+  .cap-readout{margin-top:10px;font-size:13px;color:var(--ink-soft);min-height:20px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .cap-readout .val{font-family:'IBM Plex Mono',monospace;color:var(--green-deep);font-weight:600;word-break:break-word}
+  .cap-readout .clr{font-size:11px;color:var(--rose);border:1px solid var(--line-2);background:#fff;border-radius:7px;padding:3px 8px;cursor:pointer}
+  .modal-foot{padding:11px 14px;border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex:none}
+  .modal-foot .spacer{flex:1}
+  .modal-foot .btn{padding:9px 13px;font-size:13px}
+  @media(max-width:620px){
+    .modal-foot .spacer{display:none;flex-basis:100%;height:0}
+    .modal-foot .btn{flex:1 1 calc(50% - 8px);justify-content:center}
+    .modal-foot #mapAll{flex-basis:100%}
+  }
+
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;
+    padding:12px 18px;border-radius:11px;font-size:14px;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:.25s;z-index:80;max-width:90vw}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .hidden{display:none!important}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(28,168,78,.25);border-top-color:var(--green);border-radius:50%;animation:s .7s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+      <div><h1>Ledgerly</h1><p>Invoice intelligence · runs entirely in your browser</p></div>
+    </div>
+    <div class="top-actions">
+      <button class="btn ghost" id="clearBtn">Clear all</button>
+      <button class="btn" id="xlsxBtn">Excel report</button>
+      <button class="btn primary" id="pdfBtn">PDF report</button>
+    </div>
+  </header>
+
+  <h2 class="strap">Mark one invoice. <em>Extract them all.</em></h2>
+  <p class="sub">Upload your <b>daily, weekly & monthly</b> invoices. On the first one, just draw a box around the <b>Invoice&nbsp;Number, Total, Client Name and VAT</b>. Tell Ledgerly the rest share that layout and it reads every one automatically — pulling exact text from PDFs and OCR from scans. Then export an Excel + PDF report with analytics. <b>GCC currencies supported.</b> Nothing leaves your device.</p>
+
+  <div class="drop" id="drop">
+    <input type="file" id="fileInput" multiple accept="application/pdf,image/*" class="hidden" />
+    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/></svg>
+    <h3>Drop invoices here, or click to browse</h3>
+    <p>PDF (editable or scanned), PNG, JPG · multiple files at once</p>
+    <div class="pills">
+      <span class="pill">Teach by example</span>
+      <span class="pill">PDF text + OCR</span>
+      <span class="pill">GCC currencies</span>
+      <span class="pill">100% local</span>
+    </div>
+    <div class="row-opts" onclick="event.stopPropagation()">
+      <label class="opt">Default period
+        <select id="defaultPeriod"><option>Daily</option><option>Weekly</option><option selected>Monthly</option></select>
+      </label>
+      <label class="opt">Date format
+        <select id="dateFmt"><option value="DMY" selected>Day / Month / Year</option><option value="MDY">Month / Day / Year</option></select>
+      </label>
+      <label class="opt">Currency
+        <select id="curHint">
+          <option value="auto" selected>Auto-detect</option>
+          <optgroup label="GCC">
+            <option value="AED">AED — UAE Dirham</option>
+            <option value="SAR">SAR — Saudi Riyal</option>
+            <option value="QAR">QAR — Qatari Riyal</option>
+            <option value="OMR">OMR — Omani Rial</option>
+            <option value="KWD">KWD — Kuwaiti Dinar</option>
+            <option value="BHD">BHD — Bahraini Dinar</option>
+          </optgroup>
+          <optgroup label="Other">
+            <option value="$">USD $</option><option value="€">EUR €</option><option value="£">GBP £</option>
+            <option value="₹">INR ₹</option><option value="¥">JPY/CNY ¥</option><option value="">No symbol</option>
+          </optgroup>
+        </select>
+      </label>
+    </div>
+  </div>
+
+  <div class="progress-wrap" id="progWrap">
+    <div class="pbar"><div class="pfill" id="pfill"></div></div>
+    <div class="pstatus" id="pstatus">Starting…</div>
+  </div>
+
+  <section class="sec" id="dash">
+    <div class="sec-head"><h2>Analytics</h2><span class="hint" id="dashHint">No invoices yet</span></div>
+    <div class="kpis" id="kpis"></div>
+    <div class="charts">
+      <div class="card"><h3>Invoice value over time</h3><div class="cwrap"><canvas id="chTime"></canvas></div></div>
+      <div class="card"><h3>Spend by period type</h3><div class="cwrap"><canvas id="chPeriod"></canvas></div></div>
+      <div class="card"><h3>Top clients by value</h3><div class="cwrap"><canvas id="chVendor"></canvas></div></div>
+      <div class="card"><h3>Upcoming &amp; overdue by month</h3><div class="cwrap"><canvas id="chDue"></canvas></div></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sec-head"><h2>Extracted invoices</h2><span class="hint">Click any cell to correct it — totals update live</span></div>
+    <div class="filters">
+      <div class="seg" id="periodSeg">
+        <button class="active" data-p="all">All</button><button data-p="Daily">Daily</button>
+        <button data-p="Weekly">Weekly</button><button data-p="Monthly">Monthly</button>
+      </div>
+      <div class="search"><input class="txt" id="search" placeholder="Search client, number, file…" /></div>
+    </div>
+    <div class="tbl-scroll">
+      <table id="tbl"><thead><tr>
+        <th>Client</th><th>Invoice #</th><th>Invoice date</th><th>Due date</th><th>Period</th>
+        <th style="text-align:right">Total</th><th style="text-align:right">VAT</th><th>Cur</th><th>Conf.</th><th>Source</th><th></th>
+      </tr></thead><tbody id="tbody"></tbody></table>
+    </div>
+    <div class="empty" id="emptyState">
+      <div class="big">Your extracted invoices will appear here</div>
+      <div>Drop a few files above to get started.</div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Ledgerly · open-source, static, hostable on GitHub Pages. Your invoices never leave this browser.</span>
+    <span class="muted">v2.0</span>
+  </footer>
+</div>
+
+<!-- Mapper modal -->
+<div class="backdrop" id="backdrop">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Mark the fields</h2>
+      <p><span id="mapProgress" class="fileinfo"></span> · <span id="mapFile" class="muted"></span></p>
+    </div>
+    <div class="map-toolbar">
+      <div class="seg sm" id="modeSeg">
+        <button class="active" data-mode="draw">✏️ Draw</button>
+        <button data-mode="scroll">✋ Move</button>
+      </div>
+      <div class="seg sm" id="zoomSeg">
+        <button data-z="out">−</button><button data-z="fit">Fit</button><button data-z="in">+</button>
+      </div>
+      <span class="active-field-hint" id="activeFieldHint"></span>
+    </div>
+    <div class="stage" id="stage">
+      <div class="stage-loader" id="stageLoader">
+        <div class="spin big"></div>
+        <div class="sl-msg" id="slMsg">Rendering invoice…</div>
+        <div class="sl-hint" id="slHint"></div>
+        <div class="sl-actions">
+          <button class="btn" id="slRetry" style="display:none">Retry at lower resolution</button>
+          <button class="btn primary" id="slImage" style="display:none">📷 Upload as image instead</button>
+          <input type="file" id="slImageFile" accept="image/*" class="hidden">
+        </div>
+      </div>
+      <div class="canvas-wrap" id="canvasWrap"><div id="ovLayer"></div></div>
+    </div>
+    <div class="panel">
+      <div class="lbl">Tap a field, then draw a box around it</div>
+      <div class="chips" id="fields"></div>
+      <div class="cap-readout" id="capReadout"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="mapCancel">Cancel</button>
+      <button class="btn" id="mapAuto">Skip · auto-detect</button>
+      <div class="spacer"></div>
+      <button class="btn" id="mapThisOne">Only this · next differs</button>
+      <button class="btn primary" id="mapAll">Apply to all ✓</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ===========================================================
+   Ledgerly v2 — teach-by-example invoice extraction
+   =========================================================== */
+/* pdf.js v4 loads as an ES module asynchronously — wait until it's on window */
+function waitForPdf(){
+  if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  return new Promise((res,rej)=>{
+    window.addEventListener('pdfReady',()=>res(window.pdfjsLib),{once:true});
+    setTimeout(()=>{ if(!window.pdfjsLib) rej(new Error('PDF engine failed to load — check your network connection.')); }, 20000);
+  });
+}
+
+let invoices = [];
+let filterPeriod = 'all', searchTerm = '';
+const charts = {};
+
+const $ = s => document.querySelector(s);
+const uid = () => 'inv_' + Math.random().toString(36).slice(2, 10);
+const esc = s => (s ?? '').toString().replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function toast(m,ms=2600){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),ms);}
+const iso = dt => dt.toISOString().slice(0,10);
+
+/* ---------- IndexedDB ---------- */
+const DB='ledgerly',STORE='invoices';
+function db(){return new Promise((res,rej)=>{const r=indexedDB.open(DB,1);
+  r.onupgradeneeded=()=>{if(!r.result.objectStoreNames.contains(STORE))r.result.createObjectStore(STORE,{keyPath:'id'});};
+  r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
+async function dbSaveAll(){try{const d=await db();const tx=d.transaction(STORE,'readwrite');const st=tx.objectStore(STORE);
+  st.clear();invoices.forEach(i=>st.put(i));return new Promise(r=>{tx.oncomplete=()=>r();});}catch(e){}}
+async function dbLoad(){try{const d=await db();const tx=d.transaction(STORE,'readonly');const st=tx.objectStore(STORE);
+  invoices=await new Promise(res=>{const rq=st.getAll();rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>res([]);});}catch(e){invoices=[];}}
+
+/* ---------- amount & date parsing ---------- */
+function parseAmount(raw){
+  if(raw==null) return null;
+  let s=String(raw).replace(/[^\d.,]/g,'').trim(); if(!s) return null;
+  const hc=s.includes(','),hd=s.includes('.');
+  if(hc&&hd){ if(s.lastIndexOf(',')>s.lastIndexOf('.')) s=s.replace(/\./g,'').replace(',','.'); else s=s.replace(/,/g,''); }
+  else if(hc){ const p=s.split(','); if(p.length===2&&p[1].length<=2) s=s.replace(',','.'); else s=s.replace(/,/g,''); }
+  const n=parseFloat(s); return isFinite(n)?n:null;
+}
+const MONTHS={jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+function buildDate(y,m,d){ if(y<100)y+=2000; const dt=new Date(Date.UTC(y,m,d));
+  return (dt&&dt.getUTCFullYear()===y&&dt.getUTCMonth()===m&&dt.getUTCDate()===d)?dt:null; }
+function parseDate(str,fmt){
+  if(!str) return ''; str=str.trim(); let m;
+  m=str.match(/\b(\d{1,2})(?:st|nd|rd|th)?[\s\-]+([A-Za-z]{3,9})[\s\-,]+(\d{2,4})\b/);
+  if(m){const mo=MONTHS[m[2].slice(0,3).toLowerCase()];if(mo!=null){const d=buildDate(+m[3],mo,+m[1]);if(d)return iso(d);}}
+  m=str.match(/\b([A-Za-z]{3,9})[\s\-]+(\d{1,2})(?:st|nd|rd|th)?[\s\-,]+(\d{2,4})\b/);
+  if(m){const mo=MONTHS[m[1].slice(0,3).toLowerCase()];if(mo!=null){const d=buildDate(+m[3],mo,+m[2]);if(d)return iso(d);}}
+  m=str.match(/\b(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\b/); if(m){const d=buildDate(+m[1],+m[2]-1,+m[3]);if(d)return iso(d);}
+  m=str.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/);
+  if(m){let a=+m[1],b=+m[2],y=+m[3],day,mo;
+    if(a>12&&b<=12){day=a;mo=b;} else if(b>12&&a<=12){day=b;mo=a;} else if(fmt==='MDY'){mo=a;day=b;} else {day=a;mo=b;}
+    const d=buildDate(y,mo-1,day);if(d)return iso(d);}
+  return '';
+}
+
+/* ---------- currency (incl. GCC) ---------- */
+const CURRENCIES=[
+  ['AED','AED'],['د.إ','AED'],['Dhs','AED'],['Dh','AED'],
+  ['SAR','SAR'],['SR','SAR'],['ر.س','SAR'],
+  ['QAR','QAR'],['QR','QAR'],
+  ['OMR','OMR'],['RO','OMR'],
+  ['KWD','KWD'],['KD','KWD'],['د.ك','KWD'],
+  ['BHD','BHD'],['BD','BHD'],
+  ['USD','$'],['$','$'],['EUR','€'],['€','€'],['GBP','£'],['£','£'],
+  ['INR','₹'],['Rs','₹'],['₹','₹'],['JPY','¥'],['CNY','¥'],['¥','¥'],
+];
+function detectCurrency(text,hint){ if(hint&&hint!=='auto')return hint;
+  for(const [n,c] of CURRENCIES){ if(text.includes(n)) return c; } return ''; }
+function decimalsFor(cur){ return /^(KWD|BHD|OMR)$/i.test(cur)?3:2; }
+function fmtMoney(n,cur){ if(n==null||isNaN(n))return '—';
+  const d=decimalsFor(cur),num=(+n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+  if(!cur)return num; return cur.length<=1?cur+num:cur+' '+num; }
+const AMT_RE=/\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,3})?|\d+(?:[.,]\d{1,3})?/g;
+
+/* ---------- heuristic fallbacks ---------- */
+const TOTAL_KEYS=[
+  [/\b(grand\s*total|total\s*due|balance\s*due|amount\s*due|total\s*payable|amount\s*payable|net\s*payable|total\s*inc)\b/i,5],
+  [/\b(invoice\s*total|total\s*amount|total)\b/i,3],
+  [/\b(sub\s*-?\s*total)\b/i,1],
+];
+function extractTotalHeur(lines){
+  let best={score:-1,amount:null};
+  lines.forEach((line,i)=>{ for(const [re,sc] of TOTAL_KEYS){ if(re.test(line)){
+    const pool=(line+' '+(lines[i+1]||'')).match(AMT_RE)||[];
+    const nums=pool.map(parseAmount).filter(n=>n!=null&&n>0);
+    if(nums.length){const a=Math.max(...nums); if(sc>best.score||(sc===best.score&&a>(best.amount||0)))best={score:sc,amount:a};}
+    break; } } });
+  if(best.amount!=null) return {amount:best.amount,conf:best.score>=5?0.95:best.score>=3?0.8:0.5};
+  const all=(lines.join(' ').match(AMT_RE)||[]).map(parseAmount).filter(n=>n!=null&&n>0);
+  return all.length?{amount:Math.max(...all),conf:0.35}:{amount:null,conf:0};
+}
+function extractVATHeur(lines){
+  for(const l of lines){ if(/\b(vat|tax|gst)\b/i.test(l)&&!/total\s*(amount|due|payable)/i.test(l)){
+    const a=(l.match(AMT_RE)||[]).map(parseAmount).filter(n=>n!=null&&n>=0); if(a.length)return Math.max(...a);} }
+  return null;
+}
+function extractDate(lines,type){
+  const keys=type==='due'?/\b(due\s*date|payment\s*due|due\s*by|due\s*on|pay\s*by)\b/i
+    :/\b(invoice\s*date|date\s*of\s*issue|issue\s*date|issued|bill\s*date|tax\s*date|date)\b/i;
+  for(const l of lines){ if(keys.test(l)){ const d=parseDate(l,window._fmt); if(d)return d; } }
+  if(type!=='due'){ for(const l of lines){ const d=parseDate(l,window._fmt); if(d)return d; } }
+  return '';
+}
+function extractNumberHeur(text){
+  const m=text.match(/\b(?:invoice|inv|bill|tax\s*invoice)\s*(?:no\.?|number|#|num)?\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{2,})/i);
+  return m?m[1].replace(/[.,;]$/,''):'';
+}
+const CLIENT_BAD=/(invoice|receipt|ship\s*to|date|due|tel|phone|fax|email|e-mail|www|http|gst|vat|tax\s*id|p\.?o\.?\s*box|address|terms|number|amount|total|page|statement)/i;
+function extractClientHeur(lines){
+  // prefer a "Bill To / Client / Customer" block
+  for(let i=0;i<lines.length;i++){ if(/\b(bill\s*to|client|customer|sold\s*to|invoice\s*to)\b/i.test(lines[i])){
+    const after=lines[i].replace(/.*\b(bill\s*to|client|customer|sold\s*to|invoice\s*to)\b\s*[:\-]?\s*/i,'').trim();
+    if(after.length>1) return after;
+    if(lines[i+1]) return lines[i+1].trim();
+  } }
+  for(const raw of lines.slice(0,12)){ const line=raw.trim();
+    if(line.length<2||line.length>48||CLIENT_BAD.test(line)) continue;
+    const letters=(line.match(/[A-Za-z]/g)||[]).length; if(letters<line.length*0.5||/^\d/.test(line)||parseDate(line,window._fmt)) continue;
+    return line.replace(/[|•]+/g,'').trim();
+  }
+  return 'Unknown';
+}
+function classifyPeriod(fn,fb){ const f=(fn||'').toLowerCase();
+  if(/daily|day\b/.test(f))return 'Daily'; if(/week/.test(f))return 'Weekly'; if(/month/.test(f))return 'Monthly'; return fb; }
+function cleanLabel(s){ return (s||'').replace(/^[A-Za-z .#\/&]{0,26}[:#]\s*/,'').trim(); }
+
+/* ---------- token utilities ---------- */
+function collectWords(data){
+  if(data.words&&data.words.length) return data.words;
+  const ws=[]; (data.blocks||[]).forEach(b=>(b.paragraphs||[]).forEach(p=>(p.lines||[]).forEach(l=>(l.words||[]).forEach(w=>ws.push(w)))));
+  return ws;
+}
+function wordsToTokens(data,W,H){
+  return collectWords(data).filter(w=>w.text&&w.text.trim()).map(w=>{
+    const b=w.bbox||{x0:0,y0:0,x1:0,y1:0};
+    return {text:w.text,x:b.x0/W,y:b.y0/H,w:(b.x1-b.x0)/W,h:(b.y1-b.y0)/H};
+  });
+}
+function linesFromTokens(tokens){
+  const s=[...tokens].sort((a,b)=>(a.y-b.y)||(a.x-b.x)); const lines=[]; let cur=[],cy=null;
+  for(const t of s){ if(cy==null||Math.abs(t.y-cy)<=0.013){cur.push(t);cy=cy==null?t.y:(cy*0.7+t.y*0.3);} else {lines.push(cur);cur=[t];cy=t.y;} }
+  if(cur.length)lines.push(cur);
+  return lines.map(g=>g.sort((a,b)=>a.x-b.x).map(t=>t.text).join(' ').replace(/\s+/g,' ').trim()).filter(Boolean);
+}
+function valFromBox(tokens,box){
+  if(!box) return '';
+  const inside=tokens.filter(t=>{const cx=t.x+t.w/2,cy=t.y+t.h/2;return cx>=box.x&&cx<=box.x+box.w&&cy>=box.y&&cy<=box.y+box.h;});
+  inside.sort((a,b)=>Math.abs(a.y-b.y)>0.012?a.y-b.y:a.x-b.x);
+  return inside.map(t=>t.text).join(' ').replace(/\s+/g,' ').trim();
+}
+
+/* ---------- rendering helpers ---------- */
+const OCR_LONG_EDGE=1700;   // image OCR target
+const RENDER_LONG_EDGE=1400;
+const PDFJS_CDN='https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38';
+const RENDER_TIMEOUT_MS=45000;
+
+async function renderPageToCanvas(page,scale){
+  const vp=page.getViewport({scale});
+  const c=document.createElement('canvas'); c.width=Math.ceil(vp.width); c.height=Math.ceil(vp.height);
+  const task=page.render({canvasContext:c.getContext('2d'),viewport:vp});
+  let to;
+  try{
+    await Promise.race([
+      task.promise,
+      new Promise((_,rej)=>{ to=setTimeout(()=>{
+        try{ task.cancel(); }catch(e){}
+        rej(new Error('Page render timed out. This PDF likely uses image compression that is slow on mobile browsers (common with scanner output). Tap "Upload as image" below to use the page as a PNG/JPEG instead.'));
+      }, RENDER_TIMEOUT_MS); })
+    ]);
+  } finally { clearTimeout(to); }
+  return c;
+}
+async function imageToCanvas(file){
+  const url=URL.createObjectURL(file);
+  const img=await new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=rej;im.src=url;});
+  let w=img.naturalWidth,h=img.naturalHeight; const sc=Math.min(1,OCR_LONG_EDGE/Math.max(w,h));
+  w=Math.round(w*sc);h=Math.round(h*sc);
+  const c=document.createElement('canvas'); c.width=w;c.height=h; c.getContext('2d').drawImage(img,0,0,w,h);
+  URL.revokeObjectURL(url); return c;
+}
+
+/* ---------- OCR via Tesseract.js v4 (persistent worker, with convenience-function fallback) ---------- */
+const TESS_WORKER='https://cdn.jsdelivr.net/npm/tesseract.js@4.1.4/dist/worker.min.js';
+const TESS_CORE  ='https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js';
+const TESS_LANG  ='https://tessdata.projectnaptha.com/4.0.0';
+
+let _worker=null,_workerPromise=null,_workerBroken=false;
+function getWorker(){
+  if(_worker) return Promise.resolve(_worker);
+  if(_workerPromise) return _workerPromise;
+  if(!window.Tesseract) return Promise.reject(new Error('OCR engine not loaded — refresh the page.'));
+  _workerPromise=(async()=>{
+    try{
+      const w=await Tesseract.createWorker({
+        workerPath:TESS_WORKER, corePath:TESS_CORE, langPath:TESS_LANG,
+        logger:m=>{ if(window._ocrLogger) window._ocrLogger(m); },
+        errorHandler:e=>console.error('Tesseract:',e)
+      });
+      await w.loadLanguage('eng');
+      await w.initialize('eng');
+      _worker=w; return w;
+    }catch(err){
+      _workerPromise=null; _workerBroken=true;
+      const m=(err&&(err.message||err.toString()))||'no details';
+      throw new Error('persistent worker init failed: '+m);
+    }
+  })();
+  return _workerPromise;
+}
+
+function ocrLoggerTo(setStatus){
+  return m=>{
+    if(m.status==='recognizing text') setStatus('Recognizing text… '+Math.round((m.progress||0)*100)+'%');
+    else if(/load|init|download|fetch/i.test(m.status||'')) setStatus('Loading OCR engine (first run only)…');
+  };
+}
+
+/* ---------- OCR a canvas region. Tries persistent worker; falls back to Tesseract.recognize() ---------- */
+async function ocrCanvas(canvas,setStatus){
+  window._ocrLogger=ocrLoggerTo(setStatus||(()=>{}));
+  const url=canvas.toDataURL('image/png');
+  try{
+    if(!_workerBroken){
+      try{
+        const w=await getWorker();
+        const {data}=await w.recognize(url);
+        return data;
+      }catch(e){
+        console.warn('Persistent worker failed, falling back to one-shot:',e);
+        try{ if(_worker) await _worker.terminate(); }catch{}
+        _worker=null; _workerPromise=null; _workerBroken=true;
+      }
+    }
+    // Fallback: one-shot recognize per call. Slower, but more reliable on iOS Safari.
+    const r=await Tesseract.recognize(url,'eng',{
+      workerPath:TESS_WORKER, corePath:TESS_CORE, langPath:TESS_LANG,
+      logger:m=>{ if(window._ocrLogger) window._ocrLogger(m); }
+    });
+    return r.data;
+  }
+  finally{ window._ocrLogger=null; }
+}
+
+/* ---------- phase 1: render & show quickly (no OCR yet) ---------- */
+async function prepareVisual(file,scaleOverride){
+  const isPDF=/pdf/.test(file.type)||/\.pdf$/i.test(file.name);
+  if(isPDF){
+    const pdfjsLib=await waitForPdf();
+    const buf=await file.arrayBuffer();
+    const pdf=await pdfjsLib.getDocument({
+      data:buf,
+      disableAutoFetch:true,
+      disableStream:true,
+      cMapUrl:PDFJS_CDN+'/cmaps/',
+      cMapPacked:true,
+      standardFontDataUrl:PDFJS_CDN+'/standard_fonts/',
+      wasmUrl:PDFJS_CDN+'/wasm/',
+      isEvalSupported:true
+    }).promise;
+    const page=await pdf.getPage(1);
+    const vp1=page.getViewport({scale:1});
+    const target=scaleOverride||RENDER_LONG_EDGE;
+    const scale=Math.min(2.0, target/Math.max(vp1.width,vp1.height));
+    const canvas=await renderPageToCanvas(page,scale);
+    const prep={kind:'pdf-unknown',tokens:[],fullText:'',canvas,needsOCR:true,_page:page};
+    detectTextLayer(prep);
+    return prep;
+  }
+  const canvas=await imageToCanvas(file);
+  return {kind:'image-ocr',tokens:[],fullText:'',canvas,needsOCR:true};
+}
+async function detectTextLayer(prep){
+  try{
+    const pdfjsLib=window.pdfjsLib; const page=prep._page; const tc=await page.getTextContent();
+    const ft=tc.items.map(i=>i.str).join(' ');
+    if(ft.replace(/\s/g,'').length>=25){
+      const vp=page.getViewport({scale:1});
+      prep.tokens=tc.items.map(it=>{
+        const t=pdfjsLib.Util.transform(vp.transform,it.transform);
+        const h=Math.hypot(t[2],t[3])||10, w=it.width||h*0.5*(it.str.length||1);
+        return {text:it.str,x:t[4]/vp.width,y:(t[5]-h)/vp.height,w:w/vp.width,h:h/vp.height};
+      }).filter(tk=>tk.text.trim());
+      prep.fullText=ft; prep.kind='pdf-text'; prep.needsOCR=false;
+    } else { prep.kind='pdf-ocr'; }
+  }catch(e){ console.warn('text-layer probe failed',e); prep.kind='pdf-ocr'; }
+}
+
+/* ---------- phase 2: OCR the already-rendered canvas (only when needed) ---------- */
+async function prepareOCR(prep,setStatus){
+  if(!prep.needsOCR||prep.tokens.length) return prep;
+  const data=await ocrCanvas(prep.canvas,setStatus);
+  prep.tokens=wordsToTokens(data,prep.canvas.width,prep.canvas.height);
+  prep.fullText=data.text||'';
+  return prep;
+}
+
+/* ---------- crop a normalized region from the page canvas (upscaled for OCR) ---------- */
+function cropCanvas(src,box){
+  const pad=0.012;                       // a little padding so glyphs aren't clipped
+  let bx=Math.max(0,box.x-pad), by=Math.max(0,box.y-pad);
+  let bw=Math.min(1-bx,box.w+2*pad), bh=Math.min(1-by,box.h+2*pad);
+  const sx=Math.floor(bx*src.width), sy=Math.floor(by*src.height);
+  const sw=Math.max(1,Math.floor(bw*src.width)), sh=Math.max(1,Math.floor(bh*src.height));
+  const f=Math.min(5,Math.max(1,180/sh));   // upscale small crops toward ~180px tall
+  const c=document.createElement('canvas'); c.width=Math.round(sw*f); c.height=Math.round(sh*f);
+  const ctx=c.getContext('2d'); ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality='high';
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);
+  ctx.drawImage(src,sx,sy,sw,sh,0,0,c.width,c.height);
+  return c;
+}
+/* value inside a box: text-layer tokens if available, else OCR the crop */
+async function valForBox(prep,box,setStatus){
+  if(!box) return '';
+  if(prep.tokens && prep.tokens.length){ const v=valFromBox(prep.tokens,box); if(v) return v; }
+  if(prep.kind==='pdf-text') return '';
+  const data=await ocrCanvas(cropCanvas(prep.canvas,box),setStatus);
+  return (data.text||'').replace(/\s+/g,' ').trim();
+}
+/* pick the most invoice-number-like token from loosely-boxed text */
+function pickInvoiceNo(s){
+  s=cleanLabel(s); if(!s) return '';
+  if(/^\S+$/.test(s)) return s;
+  const toks=(s.match(/[A-Za-z0-9][A-Za-z0-9\-\/]{2,}/g)||[]).filter(t=>/\d/.test(t)&&!/^\d{1,2}$/.test(t));
+  toks.sort((a,b)=>b.length-a.length);
+  return toks[0]||s.split(/\s+/).pop();
+}
+/* ensure we have page text for date/heuristic detection (lazy full-page OCR for scans) */
+async function ensureFullText(prep,setStatus){
+  if((prep.fullText||'').trim().length>15) return prep.fullText;
+  if(prep.kind==='pdf-text') return prep.fullText||'';
+  try{ const data=await ocrCanvas(prep.canvas,setStatus); prep.fullText=data.text||'';
+    if(!prep.tokens.length) prep.tokens=wordsToTokens(data,prep.canvas.width,prep.canvas.height); }catch(e){}
+  return prep.fullText||'';
+}
+
+/* ---------- build a record (async: may OCR boxes/page) ---------- */
+async function buildRecord(prep,filename,template,setStatus){
+  const hint=$('#curHint').value;
+  let number,client,total,vat,conf,currency,numRaw='',totRaw='';
+  if(template){
+    numRaw=await valForBox(prep,template.invoiceNumber,setStatus);
+    const cliRaw=await valForBox(prep,template.client,setStatus);
+    totRaw=await valForBox(prep,template.total,setStatus);
+    const vatRaw=await valForBox(prep,template.vat,setStatus);
+    number=pickInvoiceNo(numRaw);
+    client=cleanLabel(cliRaw);
+    total=parseAmount(totRaw);
+    vat=parseAmount(vatRaw);
+  }
+  // page text for dates, currency and any missing fields
+  const fullText=await ensureFullText(prep,setStatus);
+  const lines=prep.tokens&&prep.tokens.length?linesFromTokens(prep.tokens):fullText.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const txt=fullText||lines.join('\n');
+  if(!template){
+    number=extractNumberHeur(txt); client=extractClientHeur(lines);
+    total=extractTotalHeur(lines).amount; vat=extractVATHeur(lines);
+  }else{
+    if(!number) number=extractNumberHeur(txt);
+    if(!client) client=extractClientHeur(lines);
+    if(total==null) total=extractTotalHeur(lines).amount;
+    if(vat==null) vat=extractVATHeur(lines);
+  }
+  currency=detectCurrency((totRaw||'')+' '+txt,hint);
+  if(template){ const got=[template.invoiceNumber,template.total,template.client,template.vat].filter(Boolean).length;
+    conf=Math.min(0.97,0.55+got*0.1); }
+  else{ const th=extractTotalHeur(lines); conf=Math.round((th.conf*0.6+(client&&client!=='Unknown'?0.2:0)+(number?0.1:0)+(vat!=null?0.1:0))*100)/100; }
+  return {id:uid(),client:client||'Unknown',number:number||'',date:extractDate(lines,'invoice'),dueDate:extractDate(lines,'due'),
+    period:classifyPeriod(filename,$('#defaultPeriod').value),total,vat,currency,
+    confidence:Math.min(0.99,Math.max(0.05,conf||0.1)),source:filename,method:prep.kind};
+}
+
+/* ===========================================================
+   Interactive flow: queue + mapper
+   =========================================================== */
+let queue=[];                 // pending files
+let activeField='invoiceNumber';
+let template={invoiceNumber:null,total:null,client:null,vat:null};
+let currentPrep=null,currentFile=null,totalCount=0;
+const FIELD_DEFS=[
+  {key:'invoiceNumber',name:'Invoice number',cls:'',color:'#1ca84e'},
+  {key:'total',name:'Total value',cls:'f-total',color:'#e0a32e'},
+  {key:'client',name:'Client name',cls:'f-client',color:'#2f8fd6'},
+  {key:'vat',name:'VAT',cls:'f-vat',color:'#9b59b6'},
+];
+
+function validFiles(files){ return [...files].filter(f=>/pdf|image/.test(f.type)||/\.(pdf|png|jpe?g|webp|bmp|tiff?)$/i.test(f.name)); }
+
+async function startFlow(files){
+  window._fmt=$('#dateFmt').value;
+  const list=validFiles(files);
+  if(!list.length){toast('No PDF or image files found.');return;}
+  queue=list; totalCount=list.length;
+  // start downloading the OCR engine in the background while the PDF renders
+  getWorker().catch(e=>console.warn('OCR pre-warm:',e));
+  await mapNext();
+}
+
+/* state for the open invoice */
+let captures={invoiceNumber:'',total:'',client:'',vat:''};   // strings shown in chips/readout (computed values)
+let zoom=1;                                                  // 1 = fit width
+
+async function mapNext(){
+  if(!queue.length){ finishFlow(); return; }
+  template={invoiceNumber:null,total:null,client:null,vat:null};
+  captures={invoiceNumber:'',total:'',client:'',vat:''};
+  activeField='invoiceNumber'; zoom=1;
+  currentFile=queue[0];
+  $('#mapProgress').textContent=`Invoice ${totalCount-queue.length+1} of ${totalCount}`;
+  $('#mapFile').textContent=currentFile.name;
+  $('#canvasWrap').querySelectorAll('canvas').forEach(c=>c.remove());
+  $('#ovLayer').innerHTML='';
+  $('#capReadout').innerHTML='';
+  $('#backdrop').classList.add('show');
+  setStage('draw'); applyZoom();
+  renderFields(); renderReadout();
+  await loadCurrentInvoice(null);
+}
+
+let _loadGen=0;
+async function loadCurrentInvoice(scaleOverride){
+  const myGen=++_loadGen;
+  const file=currentFile;
+  $('#canvasWrap').querySelectorAll('canvas').forEach(c=>c.remove());
+  const sl=$('#stageLoader'), slMsg=$('#slMsg'), slHint=$('#slHint'),
+        slRetry=$('#slRetry'), slImage=$('#slImage');
+  sl.classList.remove('hidden','error'); slRetry.style.display='none'; slImage.style.display='none';
+  slMsg.textContent='Rendering invoice…'; slHint.textContent='';
+  const hint=setTimeout(()=>{ if(myGen===_loadGen) slHint.textContent='High-resolution scans can take 15–30 s on phones — still working.'; },7000);
+  const hard=setTimeout(()=>{ if(myGen!==_loadGen) return;
+    slMsg.textContent='Still rendering — you can retry, or upload the page as an image instead.';
+    slRetry.style.display='inline-flex'; slImage.style.display='inline-flex'; },35000);
+  try{
+    const prep=await prepareVisual(file,scaleOverride);
+    if(myGen!==_loadGen) return;
+    clearTimeout(hint); clearTimeout(hard);
+    currentPrep=prep;
+    const cv=prep.canvas; cv.id='mapCanvas';
+    $('#canvasWrap').insertBefore(cv,$('#ovLayer'));
+    sl.classList.add('hidden');
+    redrawBoxes(); applyZoom();
+  }catch(e){
+    if(myGen!==_loadGen) return;
+    clearTimeout(hint); clearTimeout(hard);
+    console.error(e);
+    sl.classList.add('error');
+    slMsg.textContent='Couldn’t render this PDF in the browser';
+    slHint.innerHTML=(e&&e.message?esc(e.message):'')+
+      '<br><br><b>Easy workaround:</b> screenshot the invoice page on your phone, then tap "Upload as image" and pick the screenshot.';
+    slRetry.style.display='inline-flex';
+    slImage.style.display='inline-flex';
+  }
+}
+$('#slRetry').addEventListener('click',()=>loadCurrentInvoice(900));
+$('#slImage').addEventListener('click',()=>$('#slImageFile').click());
+$('#slImageFile').addEventListener('change',e=>{
+  const f=e.target.files&&e.target.files[0]; e.target.value='';
+  if(!f) return;
+  currentFile=f;                                                // swap PDF for the image
+  $('#mapFile').textContent=f.name;
+  loadCurrentInvoice();
+});
+
+/* chip-based field row */
+function renderFields(){
+  const list=FIELD_DEFS.map(f=>{
+    const has=!!template[f.key]; const cap=captures[f.key];
+    const cls=`chip ${activeField===f.key?'active':''} ${f.cls}`;
+    const cv=has?(cap||'(reading…)'):'(not marked)';
+    const cvCls=has&&cap?'cv':'cv empty';
+    return `<div class="${cls}" data-field="${f.key}">
+      <div class="ct"><span class="dot" style="background:${f.color}"></span>${f.name}${has?'<span class="check">✓</span>':''}</div>
+      <div class="${cvCls}">${esc(cv)}</div></div>`;
+  }).join('');
+  $('#fields').innerHTML=list;
+  const f=FIELD_DEFS.find(d=>d.key===activeField);
+  $('#activeFieldHint').innerHTML=`Now marking: <b>${f.name}</b>`;
+}
+function renderReadout(){
+  const f=FIELD_DEFS.find(d=>d.key===activeField); const cap=captures[activeField]; const has=!!template[activeField];
+  if(!has){ $('#capReadout').innerHTML=`<span class="muted">Draw a box on the invoice for <b>${f.name}</b>.</span>`; return; }
+  $('#capReadout').innerHTML=`<span class="muted">${f.name}:</span> <span class="val">${esc(cap||'(reading…)')}</span> <button class="clr" data-clrkey="${activeField}">clear</button>`;
+}
+function redrawBoxes(){
+  const ov=$('#ovLayer'); ov.querySelectorAll('.ov-box').forEach(b=>b.remove());
+  FIELD_DEFS.forEach(f=>{ const b=template[f.key]; if(!b)return;
+    const el=document.createElement('div'); el.className='ov-box '+f.cls;
+    el.style.left=b.x*100+'%'; el.style.top=b.y*100+'%'; el.style.width=b.w*100+'%'; el.style.height=b.h*100+'%';
+    el.innerHTML=`<span class="ov-tag">${f.name}</span>`; ov.appendChild(el);
+  });
+}
+
+/* read the value inside the active field's box and update chip + readout */
+async function previewField(key){
+  const box=template[key]; if(!box) return;
+  captures[key]=''; renderFields(); renderReadout();
+  const setS=msg=>{ if(activeField===key){ $('#capReadout').innerHTML=`<span class="muted"><span class="spin"></span> ${esc(msg)}</span>`; } };
+  try{
+    let v=await valForBox(currentPrep,box,setS);
+    if(key==='invoiceNumber') v=pickInvoiceNo(v);
+    else if(key==='total'||key==='vat'){ const a=parseAmount(v); v=a==null?'':String(a); }
+    else v=cleanLabel(v);
+    captures[key]=v||'(nothing found — adjust box)';
+  }catch(e){
+    console.error('OCR error:',e);
+    captures[key]='(could not read · tap chip to retry)';
+    toast('OCR error: '+((e&&e.message?e.message:'unknown')).slice(0,90),5000);
+  }
+  renderFields(); renderReadout();
+}
+
+/* zoom + mode toggle */
+function setStage(mode){
+  const st=$('#stage'); st.classList.toggle('mode-draw', mode==='draw'); st.classList.toggle('mode-scroll', mode==='scroll');
+  [...$('#modeSeg').children].forEach(b=>b.classList.toggle('active', b.dataset.mode===mode));
+}
+function applyZoom(){
+  const w=$('#canvasWrap');
+  w.style.width = zoom===1 ? '100%' : (zoom*100)+'%';
+  w.style.maxWidth = zoom===1 ? '100%' : 'none';
+}
+$('#modeSeg').addEventListener('click',e=>{ const b=e.target.closest('button'); if(b) setStage(b.dataset.mode); });
+$('#zoomSeg').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b)return;
+  if(b.dataset.z==='in') zoom=Math.min(3,zoom+0.25);
+  else if(b.dataset.z==='out') zoom=Math.max(0.6,zoom-0.25);
+  else zoom=1;
+  applyZoom();
+});
+
+/* drawing on the overlay (touch + mouse, with proper changedTouches on touchend) */
+(function setupDraw(){
+  const ov=$('#ovLayer'); let drawing=false,sx=0,sy=0,temp=null;
+  const point=e=>{ if(e.touches&&e.touches.length) return e.touches[0];
+    if(e.changedTouches&&e.changedTouches.length) return e.changedTouches[0]; return e; };
+  const norm=e=>{ const r=ov.getBoundingClientRect(); const p=point(e);
+    return {x:Math.min(1,Math.max(0,(p.clientX-r.left)/r.width)),y:Math.min(1,Math.max(0,(p.clientY-r.top)/r.height))}; };
+  function down(e){ if(!currentPrep||$('#stage').classList.contains('mode-scroll'))return;
+    e.preventDefault(); drawing=true; const p=norm(e); sx=p.x;sy=p.y;
+    temp=document.createElement('div'); const f=FIELD_DEFS.find(d=>d.key===activeField);
+    temp.className='ov-box '+(f?f.cls:''); ov.appendChild(temp); move(e); }
+  function move(e){ if(!drawing)return; e.preventDefault(); const p=norm(e);
+    const x=Math.min(sx,p.x),y=Math.min(sy,p.y),w=Math.abs(p.x-sx),h=Math.abs(p.y-sy);
+    temp.style.left=x*100+'%';temp.style.top=y*100+'%';temp.style.width=w*100+'%';temp.style.height=h*100+'%'; }
+  function up(e){ if(!drawing)return; drawing=false; const p=norm(e);
+    const x=Math.min(sx,p.x),y=Math.min(sy,p.y),w=Math.abs(p.x-sx),h=Math.abs(p.y-sy);
+    if(temp){temp.remove();temp=null;}
+    if(w<0.01||h<0.008){ redrawBoxes(); return; }
+    template[activeField]={x,y,w,h};
+    const key=activeField;
+    // auto-advance to next unmarked field for convenience
+    const order=FIELD_DEFS.map(f=>f.key); const idx=order.indexOf(activeField);
+    const next=order.slice(idx+1).find(k=>!template[k]); if(next)activeField=next;
+    renderFields(); redrawBoxes();
+    previewField(key);                              // run OCR on the just-drawn box
+  }
+  ov.addEventListener('mousedown',down); window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
+  ov.addEventListener('touchstart',down,{passive:false}); ov.addEventListener('touchmove',move,{passive:false});
+  ov.addEventListener('touchend',up); ov.addEventListener('touchcancel',up);
+})();
+
+/* chip taps / clear */
+$('#fields').addEventListener('click',e=>{
+  const chip=e.target.closest('.chip'); if(!chip)return;
+  const key=chip.dataset.field;
+  // if the chip already has a box but capture failed, tapping re-runs OCR
+  if(template[key] && (captures[key]||'').startsWith('(could not read')){
+    activeField=key; renderFields(); renderReadout(); previewField(key); return;
+  }
+  activeField=key; renderFields(); renderReadout();
+});
+$('#capReadout').addEventListener('click',e=>{
+  const k=e.target.dataset.clrkey; if(!k)return;
+  template[k]=null; captures[k]=''; renderFields(); redrawBoxes(); renderReadout();
+});
+
+/* mapper actions */
+function closeModal(){ $('#backdrop').classList.remove('show'); }
+$('#mapCancel').addEventListener('click',()=>{ queue=[]; closeModal(); toast('Cancelled.'); });
+
+/* apply captured (post-processed) chip values onto a record */
+function applyCaps(rec, caps, tpl){
+  const usable=v=>v&&!String(v).startsWith('(');
+  if(usable(caps.invoiceNumber)) rec.number=caps.invoiceNumber;
+  if(usable(caps.client)) rec.client=caps.client;
+  if(usable(caps.total)){ const a=parseAmount(caps.total); if(a!=null) rec.total=a; }
+  if(usable(caps.vat)){ const a=parseAmount(caps.vat); if(a!=null) rec.vat=a; }
+  const got=[tpl.invoiceNumber,tpl.total,tpl.client,tpl.vat].filter(Boolean).length;
+  if(got) rec.confidence=Math.min(0.97, Math.max(rec.confidence||0, 0.55+got*0.1));
+}
+
+$('#mapAll').addEventListener('click',async()=>{
+  const tpl={...template}; const caps={...captures}; const files=queue.slice(); queue=[]; closeModal();
+  $('#progWrap').classList.add('show'); let done=0;
+  for(const file of files){
+    setProgress(done/files.length,`Reading ${file.name}…`);
+    try{
+      let rec;
+      if(file===currentFile && currentPrep){
+        // current file's boxes were already OCR'd as you drew them — only need dates/currency
+        rec=await buildRecord(currentPrep,file.name,null,msg=>setProgress(done/files.length,`${file.name} · ${msg}`));
+        applyCaps(rec, caps, tpl);
+      } else {
+        const prep=await prepareVisual(file);
+        rec=await buildRecord(prep,file.name,tpl,msg=>setProgress(done/files.length,`${file.name} · ${msg}`));
+      }
+      invoices.unshift(rec);
+    }catch(e){ invoices.unshift(errRecord(file,e)); }
+    done++; render();
+  }
+  await dbSaveAll(); setProgress(1,'Done'); setTimeout(()=>$('#progWrap').classList.remove('show'),800);
+  toast(`Extracted ${files.length} invoice${files.length>1?'s':''}.`);
+});
+
+$('#mapThisOne').addEventListener('click',async()=>{
+  const tpl={...template}; const caps={...captures}; const file=queue.shift(); const prep=currentPrep; closeModal();
+  $('#progWrap').classList.add('show');
+  try{
+    const rec=await buildRecord(prep,file.name,null,msg=>setProgress(0.5,msg));
+    applyCaps(rec, caps, tpl);
+    invoices.unshift(rec);
+  }catch(e){ invoices.unshift(errRecord(file,e)); }
+  setProgress(1,'Done'); setTimeout(()=>$('#progWrap').classList.remove('show'),600);
+  await dbSaveAll(); render();
+  if(queue.length) setTimeout(mapNext,150); else finishFlow();
+});
+
+$('#mapAuto').addEventListener('click',async()=>{
+  const file=queue.shift(); const prep=currentPrep; closeModal();
+  $('#progWrap').classList.add('show');
+  try{
+    const rec=await buildRecord(prep,file.name,null,msg=>setProgress(0.5,msg));
+    invoices.unshift(rec);
+  }catch(e){ invoices.unshift(errRecord(file,e)); }
+  setProgress(1,'Done'); setTimeout(()=>$('#progWrap').classList.remove('show'),600);
+  await dbSaveAll(); render();
+  if(queue.length) setTimeout(mapNext,150); else finishFlow();
+});
+
+function errRecord(file,e){ console.error(e); return {id:uid(),client:'(could not read)',number:'',date:'',dueDate:'',
+  period:$('#defaultPeriod').value,total:null,vat:null,currency:'',confidence:0,source:file.name,method:'error'}; }
+function finishFlow(){ toast('All invoices processed.'); }
+function setProgress(f,msg){ $('#pfill').style.width=Math.round(f*100)+'%'; $('#pstatus').textContent=msg; }
+
+/* ===========================================================
+   Rendering: table, KPIs, charts
+   =========================================================== */
+function visibleInvoices(){ return invoices.filter(i=>{
+  if(filterPeriod!=='all'&&i.period!==filterPeriod)return false;
+  if(searchTerm){const h=(i.client+' '+i.number+' '+i.source).toLowerCase(); if(!h.includes(searchTerm))return false;}
+  return true; }); }
+function render(){ renderTable(); renderKPIs(); renderCharts(); }
+
+function renderTable(){
+  const tb=$('#tbody'),rows=visibleInvoices();
+  $('#emptyState').style.display=invoices.length?'none':'block';
+  tb.innerHTML=rows.map(i=>{ const c=i.confidence,cl=c>=0.7?'hi':c>=0.45?'mid':'lo';
+    return `<tr data-id="${i.id}">
+      <td><input class="cell-input" data-f="client" value="${esc(i.client)}"></td>
+      <td><input class="cell-input" data-f="number" value="${esc(i.number)}" style="width:110px"></td>
+      <td><input class="cell-input" data-f="date" type="date" value="${esc(i.date)}"></td>
+      <td><input class="cell-input" data-f="dueDate" type="date" value="${esc(i.dueDate)}"></td>
+      <td><select class="badge-period" data-f="period">${['Daily','Weekly','Monthly'].map(p=>`<option ${p===i.period?'selected':''}>${p}</option>`).join('')}</select></td>
+      <td><input class="cell-input num" data-f="total" value="${i.total??''}" style="width:104px"></td>
+      <td><input class="cell-input num" data-f="vat" value="${i.vat??''}" style="width:88px"></td>
+      <td><input class="cell-input" data-f="currency" value="${esc(i.currency)}" style="width:54px"></td>
+      <td><span class="conf ${cl}">${Math.round(c*100)}%</span></td>
+      <td><span class="src" title="${esc(i.source)} · ${esc(i.method||'')}">${esc(i.source)}</span></td>
+      <td><button class="iconbtn" data-del="${i.id}" title="Remove">✕</button></td></tr>`;
+  }).join('');
+}
+
+function renderKPIs(){
+  const v=invoices, total=v.reduce((s,i)=>s+(+i.total||0),0), vat=v.reduce((s,i)=>s+(+i.vat||0),0);
+  const cur=(v.find(i=>i.currency)||{}).currency||'', count=v.length, avg=count?total/count:0, today=iso(new Date());
+  const overdue=v.filter(i=>i.dueDate&&i.dueDate<today).reduce((s,i)=>s+(+i.total||0),0);
+  $('#dashHint').textContent=count?`${count} invoice${count>1?'s':''} · ${fmtMoney(total,cur)} total`:'No invoices yet';
+  $('#kpis').innerHTML=
+    kpi('Total value',fmtMoney(total,cur),`${count} invoices`,'green')+
+    kpi('Total VAT',fmtMoney(vat,cur),'sum of VAT','amber')+
+    kpi('Average invoice',fmtMoney(avg,cur),'per document','')+
+    kpi('Overdue',fmtMoney(overdue,cur),'due date passed','rose');
+}
+const kpi=(l,v,m,c)=>`<div class="kpi ${c}"><div class="lab">${l}</div><div class="val">${v}</div><div class="meta">${m}</div></div>`;
+
+function destroyChart(k){ if(charts[k]){charts[k].destroy();delete charts[k];} }
+const CF={family:'Hanken Grotesk'},GRID='rgba(20,60,35,.08)',TICK='#6f8175';
+const sc=()=>({x:{grid:{color:GRID},ticks:{color:TICK,font:CF}},y:{grid:{color:GRID},ticks:{color:TICK,font:CF}}});
+function renderCharts(){
+  if(!window.Chart)return; const v=invoices.filter(i=>i.total!=null);
+  const byDate={}; v.filter(i=>i.date).forEach(i=>byDate[i.date]=(byDate[i.date]||0)+(+i.total||0));
+  const dk=Object.keys(byDate).sort(); destroyChart('time');
+  charts.time=new Chart($('#chTime'),{type:'line',data:{labels:dk,datasets:[{data:dk.map(k=>byDate[k]),
+    borderColor:'#1ca84e',backgroundColor:'rgba(28,168,78,.12)',fill:true,tension:.3,pointRadius:3,pointBackgroundColor:'#1ca84e'}]},
+    options:{plugins:{legend:{display:false}},scales:sc(),maintainAspectRatio:false}});
+
+  const per={Daily:0,Weekly:0,Monthly:0}; v.forEach(i=>per[i.period]=(per[i.period]||0)+(+i.total||0));
+  destroyChart('period');
+  charts.period=new Chart($('#chPeriod'),{type:'bar',data:{labels:Object.keys(per),datasets:[{data:Object.values(per),
+    backgroundColor:['#36c46a','#1ca84e','#138a3f'],borderRadius:7}]},
+    options:{plugins:{legend:{display:false}},scales:sc(),maintainAspectRatio:false}});
+
+  const ven={}; v.forEach(i=>ven[i.client]=(ven[i.client]||0)+(+i.total||0));
+  const top=Object.entries(ven).sort((a,b)=>b[1]-a[1]).slice(0,6); destroyChart('vendor');
+  charts.vendor=new Chart($('#chVendor'),{type:'doughnut',data:{labels:top.map(t=>t[0]),datasets:[{data:top.map(t=>t[1]),
+    backgroundColor:['#1ca84e','#36c46a','#e0a32e','#2f8fd6','#9b59b6','#138a3f'],borderColor:'#fff',borderWidth:2}]},
+    options:{plugins:{legend:{position:'right',labels:{color:TICK,font:CF,boxWidth:12}}},maintainAspectRatio:false}});
+
+  const today=iso(new Date()),due={};
+  v.filter(i=>i.dueDate).forEach(i=>{const mk=i.dueDate.slice(0,7);due[mk]=due[mk]||{o:0,u:0};if(i.dueDate<today)due[mk].o+=(+i.total||0);else due[mk].u+=(+i.total||0);});
+  const mk=Object.keys(due).sort(); destroyChart('due');
+  charts.due=new Chart($('#chDue'),{type:'bar',data:{labels:mk,datasets:[
+    {label:'Overdue',data:mk.map(k=>due[k].o),backgroundColor:'#e1654f',borderRadius:6},
+    {label:'Upcoming',data:mk.map(k=>due[k].u),backgroundColor:'#1ca84e',borderRadius:6}]},
+    options:{plugins:{legend:{labels:{color:TICK,font:CF}}},scales:{x:{stacked:true,grid:{color:GRID},ticks:{color:TICK,font:CF}},y:{stacked:true,grid:{color:GRID},ticks:{color:TICK,font:CF}}},maintainAspectRatio:false}});
+}
+
+/* ===========================================================
+   Exports
+   =========================================================== */
+function exportExcel(){
+  if(!invoices.length){toast('Nothing to export yet.');return;}
+  const wb=XLSX.utils.book_new();
+  const rows=invoices.map(i=>({Client:i.client,'Invoice #':i.number,'Invoice Date':i.date,'Due Date':i.dueDate,
+    Period:i.period,Currency:i.currency,Total:i.total,VAT:i.vat,'Confidence %':Math.round(i.confidence*100),Method:i.method||'',Source:i.source}));
+  const ws1=XLSX.utils.json_to_sheet(rows);
+  ws1['!cols']=[{wch:24},{wch:14},{wch:12},{wch:12},{wch:9},{wch:8},{wch:12},{wch:11},{wch:11},{wch:9},{wch:24}];
+  XLSX.utils.book_append_sheet(wb,ws1,'Invoices');
+  const total=invoices.reduce((s,i)=>s+(+i.total||0),0),vat=invoices.reduce((s,i)=>s+(+i.vat||0),0),today=iso(new Date());
+  const per={Daily:0,Weekly:0,Monthly:0}; invoices.forEach(i=>per[i.period]+=+i.total||0);
+  const ven={}; invoices.forEach(i=>ven[i.client]=(ven[i.client]||0)+(+i.total||0));
+  const sum=[['Ledgerly — Invoice Summary'],['Generated',new Date().toLocaleString()],[],
+    ['Total invoices',invoices.length],['Total value',total],['Total VAT',vat],
+    ['Average value',invoices.length?total/invoices.length:0],
+    ['Overdue value',invoices.filter(i=>i.dueDate&&i.dueDate<today).reduce((s,i)=>s+(+i.total||0),0)],
+    [],['Spend by period'],['Daily',per.Daily],['Weekly',per.Weekly],['Monthly',per.Monthly],
+    [],['Spend by client'],...Object.entries(ven).sort((a,b)=>b[1]-a[1])];
+  const ws2=XLSX.utils.aoa_to_sheet(sum); ws2['!cols']=[{wch:24},{wch:18}];
+  XLSX.utils.book_append_sheet(wb,ws2,'Summary');
+  XLSX.writeFile(wb,`ledgerly-report-${today}.xlsx`); toast('Excel report downloaded.');
+}
+
+async function exportPDF(){
+  if(!invoices.length){toast('Nothing to export yet.');return;}
+  const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'});
+  const W=doc.internal.pageSize.getWidth(),M=40,today=iso(new Date());
+  const cur=(invoices.find(i=>i.currency)||{}).currency||'';
+  const total=invoices.reduce((s,i)=>s+(+i.total||0),0),vat=invoices.reduce((s,i)=>s+(+i.vat||0),0);
+  doc.setFillColor(255,255,255); doc.rect(0,0,W,92,'F');
+  doc.setFillColor(28,168,78); doc.rect(0,0,6,92,'F');
+  doc.setTextColor(19,138,63); doc.setFont('helvetica','bold'); doc.setFontSize(24); doc.text('Ledgerly',M,46);
+  doc.setTextColor(111,129,117); doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.text('Invoice analytics report',M,66);
+  doc.setFontSize(9); doc.text(new Date().toLocaleString(),W-M,46,{align:'right'});
+  let y=112;
+  const kp=[['Total value',fmtMoney(total,cur)],['Total VAT',fmtMoney(vat,cur)],['Invoices',String(invoices.length)],
+    ['Overdue',fmtMoney(invoices.filter(i=>i.dueDate&&i.dueDate<today).reduce((s,i)=>s+(+i.total||0),0),cur)]];
+  const cw=(W-2*M-3*10)/4;
+  kp.forEach((k,idx)=>{const x=M+idx*(cw+10);
+    doc.setFillColor(231,247,236); doc.roundedRect(x,y,cw,56,7,7,'F');
+    doc.setTextColor(111,129,117); doc.setFontSize(8); doc.text(k[0].toUpperCase(),x+12,y+20);
+    doc.setTextColor(21,36,26); doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text(k[1],x+12,y+41); doc.setFont('helvetica','normal');});
+  y+=80;
+  const imgs=[['chTime','Invoice value over time'],['chPeriod','Spend by period'],['chVendor','Top clients'],['chDue','Due by month']];
+  const iw=(W-2*M-10)/2,ih=120;
+  for(let k=0;k<imgs.length;k++){ const [id,label]=imgs[k]; const cv=document.getElementById(id);
+    const col=k%2,row=Math.floor(k/2),x=M+col*(iw+10),yy=y+row*(ih+32);
+    doc.setTextColor(51,71,59); doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.text(label,x,yy+12);
+    try{ doc.setFillColor(247,250,247); doc.roundedRect(x,yy+18,iw,ih,6,6,'F'); doc.addImage(cv.toDataURL('image/png',1),'PNG',x+6,yy+24,iw-12,ih-12);}catch(e){} }
+  y+=2*(ih+32)+8;
+  doc.autoTable({startY:y,margin:{left:M,right:M},
+    head:[['Client','Inv #','Date','Due','Period','Total','VAT','Conf']],
+    body:invoices.map(i=>[i.client,i.number,i.date,i.dueDate,i.period,fmtMoney(i.total,i.currency),fmtMoney(i.vat,i.currency),Math.round(i.confidence*100)+'%']),
+    styles:{font:'helvetica',fontSize:8,cellPadding:4,textColor:[40,55,46]},
+    headStyles:{fillColor:[28,168,78],textColor:[255,255,255]},alternateRowStyles:{fillColor:[245,249,245]},
+    columnStyles:{5:{halign:'right'},6:{halign:'right'},7:{halign:'right'}}});
+  doc.save(`ledgerly-report-${today}.pdf`); toast('PDF report downloaded.');
+}
+
+/* ===========================================================
+   Events + boot
+   =========================================================== */
+const drop=$('#drop'),fileInput=$('#fileInput');
+drop.addEventListener('click',()=>fileInput.click());
+fileInput.addEventListener('change',e=>{startFlow(e.target.files);fileInput.value='';});
+['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
+drop.addEventListener('drop',e=>{if(e.dataTransfer.files.length)startFlow(e.dataTransfer.files);});
+
+$('#tbody').addEventListener('input',e=>{
+  const tr=e.target.closest('tr'); if(!tr)return; const inv=invoices.find(i=>i.id===tr.dataset.id); if(!inv)return;
+  const f=e.target.dataset.f; if(!f)return;
+  inv[f]=(f==='total'||f==='vat')?parseAmount(e.target.value):e.target.value;
+  inv.confidence=0.99; renderKPIs(); renderCharts(); dbSaveAll();
+});
+$('#tbody').addEventListener('change',e=>{ if(e.target.dataset.f==='period'){const tr=e.target.closest('tr');const inv=invoices.find(i=>i.id===tr.dataset.id);if(inv){inv.period=e.target.value;render();dbSaveAll();}} });
+$('#tbody').addEventListener('click',e=>{ const id=e.target.dataset.del; if(!id)return; invoices=invoices.filter(i=>i.id!==id); dbSaveAll(); render(); toast('Invoice removed.'); });
+
+$('#periodSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.classList.remove('active'));b.classList.add('active');filterPeriod=b.dataset.p;renderTable();});
+$('#search').addEventListener('input',e=>{searchTerm=e.target.value.toLowerCase().trim();renderTable();});
+$('#xlsxBtn').addEventListener('click',exportExcel);
+$('#pdfBtn').addEventListener('click',exportPDF);
+$('#clearBtn').addEventListener('click',()=>{if(confirm('Remove all invoices from this browser?')){invoices=[];dbSaveAll();render();toast('All invoices cleared.');}});
+
+(async function init(){ window._fmt=$('#dateFmt').value; await dbLoad(); render(); })();
+</script>
+</body>
+</html>
